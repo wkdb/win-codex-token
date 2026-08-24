@@ -1,0 +1,10 @@
+{
+  "name": "codex-weekly-meter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Windows tray meter for Codex rate limits",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@openai/codex": "0.145.0"
+  }
+}
