@@ -48,9 +48,12 @@ function ConvertFrom-CodexRateLimits {
     $ordered = @($windows | Sort-Object DurationMinutes)
     $session = if ($ordered.Count -gt 0) { $ordered[0] } else { $null }
     $weekly = if ($ordered.Count -gt 1) { $ordered[-1] } else { $session }
+    $fiveHour = @($windows | Where-Object { $_.DurationMinutes -eq 300 } | Select-Object -First 1)
+    if ($fiveHour.Count -eq 0) { $fiveHour = $null } else { $fiveHour = $fiveHour[0] }
 
     [pscustomobject]@{
         Session          = $session
+        FiveHour         = $fiveHour
         Weekly           = $weekly
         PlanType         = Get-PropertyValue -Object $RateLimits -Name 'planType' -Default ''
         LimitReachedType = Get-PropertyValue -Object $RateLimits -Name 'rateLimitReachedType'

@@ -143,6 +143,9 @@ function Set-TrayIcon {
 
 function Set-StatusText {
     param([string]$Message, [string]$Details = '')
+    $script:FiveHourLabel.Visible = $false
+    $script:FiveHourValue.Visible = $false
+    $script:FiveHourReset.Visible = $false
     $script:WeeklyValue.Text = '--%'
     $script:WeeklyReset.Text = $Message
     $script:UpdatedLabel.Text = $Details
@@ -161,10 +164,11 @@ function Set-TransientStatus {
     }
 
     $remaining = [int]$script:Model.Weekly.RemainingPercent
-    $script:StatusLabel.Text = "Codex  本周 $remaining% · 暂存"
+    $fiveHourText = if ($null -ne $script:Model.FiveHour) { "五小时 $([int]$script:Model.FiveHour.RemainingPercent)% · " } else { '' }
+    $script:StatusLabel.Text = "Codex  $fiveHourText`本周 $remaining% · 暂存"
     $script:StatusLabel.ForeColor = $script:StatusMutedTextColor
     $script:UpdatedLabel.Text = "上次刷新：$($script:Model.UpdatedAt.ToString('yyyy-MM-dd HH:mm:ss')) · 暂存"
-    Set-TrayIcon -Text ([string]$remaining) -Color '#6C757D' -Tooltip "Codex 本周 $remaining%（暂存）"
+    Set-TrayIcon -Text ([string]$remaining) -Color '#6C757D' -Tooltip "Codex $fiveHourText`本周 $remaining%（暂存）"
 }
 
 function Save-ModelCache {
@@ -173,9 +177,15 @@ function Save-ModelCache {
         $directory = Split-Path -Parent $script:CachePath
         if (-not (Test-Path -LiteralPath $directory)) { New-Item -ItemType Directory -Path $directory -Force | Out-Null }
         $resetAt = if ($null -ne $script:Model.Weekly.ResetsAt) { $script:Model.Weekly.ResetsAt.ToString('o') } else { $null }
+        $fiveHour = $null
+        if ($null -ne $script:Model.FiveHour) {
+            $fiveHourResetAt = if ($null -ne $script:Model.FiveHour.ResetsAt) { $script:Model.FiveHour.ResetsAt.ToString('o') } else { $null }
+            $fiveHour = @{ remainingPercent = [int]$script:Model.FiveHour.RemainingPercent; resetsAt = $fiveHourResetAt }
+        }
         @{
             remainingPercent = [int]$script:Model.Weekly.RemainingPercent
             resetsAt = $resetAt
+            fiveHour = $fiveHour
             updatedAt = $script:Model.UpdatedAt.ToString('o')
         } | ConvertTo-Json | Set-Content -LiteralPath $script:CachePath -Encoding UTF8
     } catch {
@@ -188,11 +198,17 @@ function Load-ModelCache {
         $remaining = $null
         $updatedAt = $null
         $resetsAt = $null
+        $fiveHour = $null
         if (Test-Path -LiteralPath $script:CachePath) {
             $cache = Get-Content -LiteralPath $script:CachePath -Raw | ConvertFrom-Json
             $remaining = [int]$cache.remainingPercent
             $updatedAt = [DateTimeOffset]::Parse([string]$cache.updatedAt)
             if ($cache.resetsAt) { $resetsAt = [DateTimeOffset]::Parse([string]$cache.resetsAt) }
+            if ($cache.PSObject.Properties['fiveHour'] -and $null -ne $cache.fiveHour) {
+                $fiveHourResetAt = $null
+                if ($cache.fiveHour.resetsAt) { $fiveHourResetAt = [DateTimeOffset]::Parse([string]$cache.fiveHour.resetsAt) }
+                $fiveHour = [pscustomobject]@{ RemainingPercent = [int]$cache.fiveHour.remainingPercent; ResetsAt = $fiveHourResetAt; DurationMinutes = 300 }
+            }
         } elseif (Test-Path -LiteralPath $script:LogPath) {
             # Migration fallback for installations created before cache support.
             $lastSuccess = Get-Content -LiteralPath $script:LogPath -Tail 500 |
@@ -207,6 +223,7 @@ function Load-ModelCache {
 
         $script:Model = [pscustomobject]@{
             Weekly = [pscustomobject]@{ RemainingPercent = $remaining; ResetsAt = $resetsAt }
+            FiveHour = $fiveHour
             Session = $null
             UpdatedAt = $updatedAt
         }
@@ -221,14 +238,44 @@ function Update-Display {
     if ($null -eq $script:Model -or $null -eq $script:Model.Weekly) { return }
     $weekly = $script:Model.Weekly
     $remaining = [int]$weekly.RemainingPercent
+    $hasFiveHour = $null -ne $script:Model.FiveHour
+    $fiveHourText = ''
+
+    if ($hasFiveHour) {
+        $fiveHourRemaining = [int]$script:Model.FiveHour.RemainingPercent
+        $fiveHourText = "五小时 $fiveHourRemaining% · "
+        $script:FiveHourLabel.Visible = $true
+        $script:FiveHourValue.Visible = $true
+        $script:FiveHourReset.Visible = $true
+        $script:FiveHourValue.Text = "$fiveHourRemaining%"
+        $script:FiveHourReset.Text = "重置：$(Format-CodexResetTime $script:Model.FiveHour.ResetsAt)"
+        $script:WeeklyLabel.Location = New-Object Drawing.Point 20, 112
+        $script:WeeklyValue.Location = New-Object Drawing.Point 225, 102
+        $script:WeeklyReset.Location = New-Object Drawing.Point 20, 138
+        $script:UpdatedLabel.Location = New-Object Drawing.Point 20, 162
+        $script:Form.ClientSize = New-Object Drawing.Size 340, 200
+        $script:StatusForm.Size = New-Object Drawing.Size 315, 38
+        $script:StatusTextForm.Size = $script:StatusForm.Size
+    } else {
+        $script:FiveHourLabel.Visible = $false
+        $script:FiveHourValue.Visible = $false
+        $script:FiveHourReset.Visible = $false
+        $script:WeeklyLabel.Location = New-Object Drawing.Point 20, 62
+        $script:WeeklyValue.Location = New-Object Drawing.Point 225, 52
+        $script:WeeklyReset.Location = New-Object Drawing.Point 20, 88
+        $script:UpdatedLabel.Location = New-Object Drawing.Point 20, 112
+        $script:Form.ClientSize = New-Object Drawing.Size 340, 150
+        $script:StatusForm.Size = New-Object Drawing.Size 225, 38
+        $script:StatusTextForm.Size = $script:StatusForm.Size
+    }
 
     $script:WeeklyValue.Text = "$remaining%"
     $script:WeeklyReset.Text = "重置：$(Format-CodexResetTime $weekly.ResetsAt)"
     $script:UpdatedLabel.Text = "上次刷新：$($script:Model.UpdatedAt.ToString('yyyy-MM-dd HH:mm:ss'))"
     $color = Get-CodexMeterColor -RemainingPercent $remaining
-    Set-TrayIcon -Text ([string]$remaining) -Color $color -Tooltip "Codex 本周剩余 $remaining%"
+    Set-TrayIcon -Text ([string]$remaining) -Color $color -Tooltip "Codex $fiveHourText`本周剩余 $remaining%"
     if ($null -ne $script:StatusLabel) {
-        $script:StatusLabel.Text = "Codex  本周 $remaining%"
+        $script:StatusLabel.Text = "Codex  $fiveHourText`本周 $remaining%"
         # Keep the always-on overlay calm; the tray icon still uses the
         # threshold color for at-a-glance warnings.
         $script:StatusLabel.ForeColor = $script:StatusTextColor
@@ -551,11 +598,34 @@ $title.Location = New-Object Drawing.Point 18, 15
 $title.AutoSize = $true
 $script:Form.Controls.Add($title)
 
-$weeklyLabel = New-Object Windows.Forms.Label
-$weeklyLabel.Text = '本周剩余'
-$weeklyLabel.Location = New-Object Drawing.Point 20, 62
-$weeklyLabel.Size = New-Object Drawing.Size 100, 24
-$script:Form.Controls.Add($weeklyLabel)
+$script:FiveHourLabel = New-Object Windows.Forms.Label
+$script:FiveHourLabel.Text = '五小时剩余'
+$script:FiveHourLabel.Location = New-Object Drawing.Point 20, 62
+$script:FiveHourLabel.Size = New-Object Drawing.Size 100, 24
+$script:FiveHourLabel.Visible = $false
+$script:Form.Controls.Add($script:FiveHourLabel)
+
+$script:FiveHourValue = New-Object Windows.Forms.Label
+$script:FiveHourValue.Text = '--%'
+$script:FiveHourValue.Font = New-Object Drawing.Font('Segoe UI', 18, [Drawing.FontStyle]::Bold)
+$script:FiveHourValue.Location = New-Object Drawing.Point 225, 52
+$script:FiveHourValue.Size = New-Object Drawing.Size 90, 34
+$script:FiveHourValue.TextAlign = [Drawing.ContentAlignment]::MiddleRight
+$script:FiveHourValue.Visible = $false
+$script:Form.Controls.Add($script:FiveHourValue)
+
+$script:FiveHourReset = New-Object Windows.Forms.Label
+$script:FiveHourReset.Location = New-Object Drawing.Point 20, 88
+$script:FiveHourReset.Size = New-Object Drawing.Size 295, 22
+$script:FiveHourReset.ForeColor = [Drawing.Color]::DimGray
+$script:FiveHourReset.Visible = $false
+$script:Form.Controls.Add($script:FiveHourReset)
+
+$script:WeeklyLabel = New-Object Windows.Forms.Label
+$script:WeeklyLabel.Text = '本周剩余'
+$script:WeeklyLabel.Location = New-Object Drawing.Point 20, 62
+$script:WeeklyLabel.Size = New-Object Drawing.Size 100, 24
+$script:Form.Controls.Add($script:WeeklyLabel)
 
 $script:WeeklyValue = New-Object Windows.Forms.Label
 $script:WeeklyValue.Text = '--%'
